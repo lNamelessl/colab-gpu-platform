@@ -75,11 +75,16 @@ class ColabClient:
         tok = await gauth.access_token()
         if not tok:
             raise ColabError(0, "not connected: no Google credential")
-        return {
+        headers = {
             "Authorization": f"Bearer {tok}",
             "Accept": "application/json",
             "X-Goog-Api-Client": config.CLIENT_AGENT,
         }
+        quota = gauth.quota_project()
+        if quota:
+            # The Colab API requires a quota project for ADC user credentials.
+            headers["x-goog-user-project"] = quota
+        return headers
 
     @staticmethod
     def _handle_from_runtime(rt: dict) -> ConnectionHandle:

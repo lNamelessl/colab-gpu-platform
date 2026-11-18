@@ -139,6 +139,20 @@ async def access_token() -> str | None:
     return creds.token if creds else None
 
 
+def quota_project() -> str | None:
+    """Stored quota project id (x-goog-user-project) for Colab API calls."""
+    creds = _cached_creds
+    if creds is not None and getattr(creds, "quota_project_id", None):
+        return creds.quota_project_id
+    if config.CREDENTIAL_PATH.exists():
+        try:
+            raw = json.loads(config.CREDENTIAL_PATH.read_text(encoding="utf-8"))
+            return raw.get("quota_project_id") or config.QUOTA_PROJECT_ID or None
+        except (ValueError, OSError):
+            return None
+    return config.QUOTA_PROJECT_ID or None
+
+
 async def fetch_identity() -> dict | None:
     """Best-effort account email for the dashboard badge."""
     global _identity

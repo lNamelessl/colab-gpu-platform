@@ -23,6 +23,22 @@ log = logging.getLogger("main")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db.connect()
+    # Crash reconciliation: runs left PROVISIONING/RUNNING by a previous
+    # worker death are treated as reclaimed — auto-resume keeps the promise.
+    try:
+        zombies = await db.active_runs()
+        for run in zombies:
+            await db.update_run(
+                run["id"], status="RECLAIMED", finished_at=db.now(),
+                error="worker restarted mid-run (crash reconciliation)",
+            )
+            if run.get("job_id"):
+                await worker.enqueue(run["job_id"], attempt=run["attempt"] + 1,
+                                     trigger="resume")
+        if zombies:
+            log.info("reconciled %d zombie run(s) from a previous worker", len(zombies))
+    except Exception as e:  # noqa: BLE001
+        log.warning("zombie reconciliation failed: %s", e)
     # Seed credential from env (template deploys: GOOGLE_CREDENTIALS_JSON).
     if config.GOOGLE_CREDENTIALS_JSON:
         try:

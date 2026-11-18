@@ -42,6 +42,7 @@ survive disconnects, browser closure, and runtime reclamation via checkpoint/res
 |---|---|
 | Free tier lifetime | Runtimes are capped (~12 h) and **idle runtimes are actively deleted by Colab** — that is Colab's design, not a bug. Checkpoint/resume is the reliability mechanism. |
 | No synthetic keep-alive | The platform never pings the runtime to keep it alive. The only periodic call is a token refresh (`GetRuntime` at expiry − 5 min) — a metadata read, identical to what Google's own VS Code client does. |
+| VM boot pacing | Under load, Colab's VM assignment can take minutes and freshly assigned VMs sometimes boot a kernel that never leaves `starting` (a hung VM). The platform boot-probes every new runtime (waits up to 7 min for `idle`), tears down hung VMs and reprovisions (up to 5 tries) — provisioning a busy-day job can therefore take a while. |
 | Quota | Colab free tier has usage limits and may refuse runtimes (quota/stockout); errors surface verbatim. Pro/Pro+ raise limits and unlock A100/H100. |
 | ToS | Batch compute via the official Colab API on your own account is sanctioned use. **Hosting live web services from runtimes is prohibited** — this platform only orchestrates job executions. |
 | API beta | The Colab API is v1beta and (as of the vendored spec) allowlist-gated per project; if your account gets 401/403, the platform surfaces it at connect time. |

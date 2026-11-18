@@ -40,10 +40,14 @@ added post-deploy.
 - Free-tier Colab caps runtimes (~12 h) and **actively deletes idle runtimes** — that
   is Colab's design. This platform never sends synthetic keep-alive; checkpoint/resume
   is the reliability mechanism.
+- Under load, Colab VMs can take minutes to boot and occasionally hang (`starting`
+  forever). The platform boot-probes each new runtime, tears down hung VMs and
+  reprovisions (up to 5 tries) — busy-day provisioning can take a while, honestly.
 - Colab quota can refuse runtime creation (quota/stockout) — errors surface verbatim.
   Pro/Pro+ raise limits and unlock A100/H100 (eligibility comes from the API itself).
 - The Colab API is v1beta and allowlist-gated for some accounts; a 401/403 surfaces
-  immediately at connect time.
+  immediately at connect time. It also requires a **quota project** (any of your
+  Google Cloud project IDs — the platform handles the header and API enablement).
 - Files move through the Jupyter Contents API: 45 MB max per artifact/checkpoint file.
 - Orchestration via the official API on your own account is sanctioned use; hosting
   live web services from runtimes is prohibited and this platform does not do it.

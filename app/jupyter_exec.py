@@ -4,16 +4,33 @@ Standard Jupyter API blessed by the Runtime schema:
 - POST {url}/api/sessions
 - WS /api/kernels/{kernel_id}/channels (kernel message protocol)
 - Contents API for file upload/download (base64, <50MB/request)
-Auth: X-Colab-Runtime-Proxy-Token header (+ query param fallback for WS).
+
+Auth (verified live against Colab runtimes):
+- HTTP: X-Colab-Runtime-Proxy-Token header.
+- WS: query params session_id + token + colab-runtime-proxy-token AND the
+  X-Colab-Runtime-Proxy-Token header. The kernel channel socket MUST be kept
+  alive with client-side pings (the Colab proxy sends none and drops idle
+  sockets).
+
+WS stack: `websocket-client` (WebSocketApp) in a worker thread — the same
+library colab-cli uses via jupyter_kernel_client. The asyncio `websockets`
+library gets its sockets silently reset by the Colab proxy (verified
+2026-11-18: identical URL/headers — websocket-client round-trips, websockets
+gets no frames then a frameless close).
 """
+import asyncio
 import base64
 import json
+import queue
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Awaitable, Callable
+from urllib.parse import quote, urlencode
 
 import httpx
-from websockets.asyncio.client import connect as ws_connect
+import websocket as ws_client
 
 from .colab_api import ConnectionHandle
 
@@ -80,7 +97,25 @@ class JupyterClient:
         self.kernel_id = (data.get("kernel") or {}).get("id")
         if not self.kernel_id:
             raise JupyterError("session created but no kernel id returned")
+        # The kernel can take a while to reach idle on a cold runtime; report
+        # but do not block here (the WS buffers shell messages anyway).
         return data
+
+    async def wait_kernel_idle(self, timeout_s: float = 180.0) -> str:
+        """Poll GET /api/kernels/{id} until execution_state != 'starting'."""
+        deadline = time.monotonic() + timeout_s
+        state = "unknown"
+        while time.monotonic() < deadline:
+            try:
+                r = await self._http.get(f"/api/kernels/{self.kernel_id}")
+                if r.status_code == 200:
+                    state = (r.json() or {}).get("execution_state") or state
+                    if state != "starting":
+                        return state
+            except Exception:  # noqa: BLE001 — transient proxy errors
+                pass
+            await asyncio.sleep(3)
+        return state
 
     async def delete_session(self, session_id: str | None = None) -> None:
         sid = session_id or self.session_id
@@ -100,7 +135,6 @@ class JupyterClient:
             "format": "base64",
             "content": base64.b64encode(data).decode("ascii"),
         }
-        from urllib.parse import quote
         r = await self._http.put(
             f"/api/contents/{quote(path.lstrip('/'))}", json=payload
         )
@@ -108,7 +142,6 @@ class JupyterClient:
             raise JupyterError(f"PUT {path} failed: HTTP {r.status_code} {r.text[:300]}")
 
     async def download_file(self, path: str) -> bytes:
-        from urllib.parse import quote
         r = await self._http.get(
             f"/api/contents/{quote(path.lstrip('/'))}", params={"content": "1"}
         )
@@ -123,7 +156,6 @@ class JupyterClient:
         return content.encode("utf-8") if isinstance(content, str) else b""
 
     async def list_dir(self, path: str) -> list[dict]:
-        from urllib.parse import quote
         r = await self._http.get(
             f"/api/contents/{quote(path.lstrip('/'))}", params={"content": "1"}
         )
@@ -146,126 +178,171 @@ class JupyterClient:
         """Execute code, stream outputs, return aggregate text. Raises ExecutionError."""
         if not self.kernel_id:
             raise JupyterError("no active kernel session")
-        ws_url = (
-            f"{self.handle.ws_base}/api/kernels/{self.kernel_id}/channels"
-            f"?colab-runtime-proxy-token={self.handle.token}"
-        )
         client_session = self.session_id or uuid.uuid4().hex
-        msg_id = uuid.uuid4().hex
-        req = {
-            "header": {
-                "msg_id": msg_id,
-                "username": "colab-gpu-platform",
-                "session": client_session,
-                "msg_type": "execute_request",
-                "version": "5.3",
-                "date": datetime.now(timezone.utc).isoformat(),
-            },
-            "parent_header": {},
-            "metadata": {},
-            "content": {
-                "code": code,
-                "silent": False,
-                "store_history": True,
-                "user_expressions": {},
-                "allow_stdin": False,
-                "stop_on_error": True,
-            },
-            "buffers": [],
-        }
-        chunks: list[str] = []
-        error: ExecutionError | None = None
-        saw_reply = False
-        import websockets.exceptions as _ws_exc
+        ws_url = (
+            f"{self.handle.ws_base}/api/kernels/{self.kernel_id}/channels?"
+            + urlencode(
+                {
+                    "session_id": client_session,
+                    "token": self.handle.token,
+                    "colab-runtime-proxy-token": self.handle.token,
+                }
+            )
+        )
+        loop = asyncio.get_running_loop()
+        out_q: asyncio.Queue = asyncio.Queue()
+        result: dict = {"reply": None, "error": None, "lost": None, "chunks": []}
 
-        async with ws_connect(
-            ws_url,
-            additional_headers=_headers(self.handle),
-            max_size=64 * 1024 * 1024,
-            open_timeout=30,
-            ping_interval=25,
-        ) as ws:
-            await ws.send(json.dumps(req))
-            deadline = asyncio_loop_time() + timeout_s
-            while True:
-                remaining = deadline - asyncio_loop_time()
-                if remaining <= 0:
-                    raise ExecutionTimeout(
-                        f"execution timed out after {timeout_s:.0f}s (timeout_min cap)"
-                    )
-                try:
-                    frame = await asyncio_wait_for(ws.recv(), timeout=min(remaining, 30))
-                except TimeoutError:
-                    continue
-                except _ws_exc.ConnectionClosed as e:
-                    raise ConnectionLost(f"kernel channel closed mid-run: {e}") from e
-                msg = _deserialize(frame)
-                if msg is None:
-                    continue
-                if msg.get("msg_type") == "colab_request":
-                    continue  # Colab internal handshake; ignore
-                parent = (msg.get("parent_header") or {}).get("msg_id")
-                if parent and parent != msg_id:
-                    continue
-                mt = msg.get("msg_type")
-                content = msg.get("content") or {}
-                if mt == "stream":
-                    text = f"[{content.get('name', 'stdout')}] {content.get('text', '')}"
-                    chunks.append(text)
-                    if on_output:
-                        await on_output(text)
-                elif mt in ("execute_result", "display_data"):
-                    data = content.get("data") or {}
-                    plain = data.get("text/plain")
-                    if plain:
-                        text = f"[result] {plain}"
-                        chunks.append(text)
-                        if on_output:
-                            await on_output(text)
-                    else:
-                        mimes = [k for k in data.keys() if k != "text/plain"]
-                        if mimes:
-                            text = f"[rich output: {', '.join(mimes)}]"
-                            chunks.append(text)
-                            if on_output:
-                                await on_output(text)
-                elif mt == "error":
-                    ename = content.get("ename", "Error")
-                    evalue = content.get("evalue", "")
-                    tb = content.get("traceback") or []
-                    error = ExecutionError(ename, evalue, tb)
-                    text = f"[error] {ename}: {evalue}"
-                    chunks.append(text)
-                    if on_output:
-                        await on_output(text)
-                elif mt == "execute_reply":
-                    saw_reply = True
-                    status = content.get("status")
-                    if status == "error" and error is None:
-                        error = ExecutionError(
-                            (content.get("ename") or "Error"),
-                            (content.get("evalue") or ""),
-                            content.get("traceback") or [],
+        def _emit_threadsafe(line: str):
+            if not line:
+                return
+            loop.call_soon_threadsafe(out_q.put_nowait, line)
+
+        def _thread_main():
+            frames: queue.Queue = queue.Queue()
+            opened = threading.Event()
+
+            def on_open(ws):
+                opened.set()
+
+            def on_message(ws, frame):
+                frames.put(("msg", frame))
+
+            def on_error(ws, err):
+                frames.put(("err", str(err)))
+
+            def on_close(ws, code, msg):
+                frames.put(("close", f"{code} {msg}"))
+
+            app = ws_client.WebSocketApp(
+                ws_url,
+                header=_headers(self.handle),
+                on_open=on_open,
+                on_message=on_message,
+                on_error=on_error,
+                on_close=on_close,
+            )
+            threading.Thread(
+                target=lambda: app.run_forever(ping_interval=20, ping_timeout=10),
+                daemon=True,
+            ).start()
+            try:
+                if not opened.wait(30):
+                    result["lost"] = "kernel channel WS did not open within 30s"
+                    return
+                msg_id = uuid.uuid4().hex
+                req = {
+                    "header": {
+                        "msg_id": msg_id,
+                        "username": "colab-gpu-platform",
+                        "session": client_session,
+                        "msg_type": "execute_request",
+                        "version": "5.3",
+                        "date": datetime.now(timezone.utc).isoformat(),
+                    },
+                    "parent_header": {},
+                    "metadata": {},
+                    "content": {
+                        "code": code,
+                        "silent": False,
+                        "store_history": True,
+                        "user_expressions": {},
+                        "allow_stdin": False,
+                        "stop_on_error": True,
+                    },
+                    "buffers": [],
+                }
+                app.send(json.dumps(req))
+                deadline = time.monotonic() + timeout_s
+                while True:
+                    if time.monotonic() > deadline:
+                        result["error"] = ExecutionTimeout(
+                            f"execution timed out after {timeout_s:.0f}s (timeout_min cap)"
                         )
+                        return
+                    try:
+                        kind, frame = frames.get(timeout=2.0)
+                    except queue.Empty:
+                        continue
+                    if kind != "msg":
+                        if result["reply"] is not None:
+                            return
+                        result["lost"] = f"kernel channel closed: {frame}"
+                        return
+                    msg = _deserialize(frame)
+                    if msg is None:
+                        continue
+                    if msg.get("msg_type") == "colab_request":
+                        continue  # Colab-internal auth handshake; ignore
+                    parent = (msg.get("parent_header") or {}).get("msg_id")
+                    if parent and parent != msg_id:
+                        continue
+                    mt = msg.get("msg_type")
+                    content = msg.get("content") or {}
+                    if mt == "stream":
+                        line = f"[{content.get('name', 'stdout')}] {content.get('text', '')}"
+                        result["chunks"].append(line)
+                        _emit_threadsafe(line)
+                    elif mt in ("execute_result", "display_data"):
+                        data = content.get("data") or {}
+                        plain = data.get("text/plain")
+                        line = (
+                            f"[result] {plain}"
+                            if plain
+                            else "[rich output: " + ", ".join(k for k in data.keys() if k != "text/plain") + "]"
+                        )
+                        result["chunks"].append(line)
+                        _emit_threadsafe(line)
+                    elif mt == "error":
+                        ename = content.get("ename", "Error")
+                        evalue = content.get("evalue", "")
+                        line = f"[error] {ename}: {evalue}"
+                        result["chunks"].append(line)
+                        _emit_threadsafe(line)
+                        result["error"] = ExecutionError(
+                            ename, evalue, content.get("traceback") or []
+                        )
+                        return
+                    elif mt == "execute_reply":
+                        status = content.get("status")
+                        if status == "error" and result["error"] is None:
+                            result["error"] = ExecutionError(
+                                content.get("ename") or "Error",
+                                content.get("evalue") or "",
+                                content.get("traceback") or [],
+                            )
+                        result["reply"] = content
+                        return
+            finally:
+                try:
+                    app.close()
+                except Exception:  # noqa: BLE001
+                    pass
+
+        thread = threading.Thread(target=_thread_main, daemon=True)
+        thread.start()
+        # Drain output while the worker runs; stream to subscribers.
+        while True:
+            drained = False
+            while True:
+                try:
+                    line = out_q.get_nowait()
+                    drained = True
+                    if on_output:
+                        await on_output(line)
+                except asyncio.QueueEmpty:
                     break
-                elif mt == "status":
-                    if content.get("execution_state") == "dead":
-                        raise JupyterError("kernel died during execution")
-        if error:
-            raise error
-        if not saw_reply:
-            raise JupyterError("WS closed before execute_reply")
-        return "\n".join(chunks)
-
-
-def asyncio_loop_time() -> float:
-    import asyncio
-    return asyncio.get_event_loop().time()
-
-
-async def asyncio_wait_for(aw, timeout: float):
-    import asyncio
-    return await asyncio.wait_for(aw, timeout=timeout)
+            if not thread.is_alive() and not drained and out_q.empty():
+                break
+            await asyncio.wait_for(asyncio.sleep(0.2), timeout=1.0)
+        if result["error"]:
+            raise result["error"]
+        if result["lost"]:
+            raise ConnectionLost(result["lost"])
+        reply = result["reply"]
+        if reply is None:
+            raise JupyterError("kernel channel closed before execute_reply")
+        return "\n".join(result["chunks"])
 
 
 def _deserialize(frame) -> dict | None:

@@ -101,7 +101,13 @@ class ColabClient:
 
     async def create_runtime(self, accelerator: str, shape: str,
                              timeout_s: float = 420.0) -> ConnectionHandle:
-        """CreateRuntime (LRO) + poll until done. Returns live connection."""
+        """CreateRuntime (LRO) + poll until live. Returns live connection.
+
+        Readiness: the LRO's metadata carries the runtime name immediately; we
+        poll GetRuntime on that id until it returns connectionInfo. (The
+        operations.get/:wait endpoints 404 at this host — verified 2026-11-18
+        — so GetRuntime polling is the only working readiness signal.)
+        """
         request_id = str(uuid.uuid4())
         body = {"runtimeSpec": spec_key(accelerator, shape)}
         r = await self._client.post(
@@ -113,44 +119,35 @@ class ColabClient:
         if r.status_code >= 400:
             raise ColabError(r.status_code, f"CreateRuntime failed: HTTP {r.status_code}", r.text)
         op = r.json()
-        op_name = op.get("name")
+        if op.get("done"):
+            if op.get("error"):
+                err = op["error"] or {}
+                reason, msg = _parse_error_details(err)
+                raise ColabError(
+                    err.get("code", 9),
+                    f"CreateRuntime failed: {msg}" + (f" (reason: {reason})" if reason else ""),
+                )
+            resp = op.get("response") or {}
+            rt = resp.get("runtime") if "runtime" in resp else resp
+            if rt and rt.get("connectionInfo"):
+                return self._handle_from_runtime(rt)
+        runtime_name = (op.get("metadata") or {}).get("runtime") or ""
+        if not runtime_name:
+            raise ColabError(0, "CreateRuntime returned no metadata.runtime (cannot poll)")
+        runtime_id = runtime_name.removeprefix("runtimes/")
         deadline = asyncio.get_event_loop().time() + timeout_s
-        while not op.get("done"):
-            if asyncio.get_event_loop().time() > deadline:
-                raise ColabError(0, f"CreateRuntime LRO timed out after {timeout_s:.0f}s")
-            await asyncio.sleep(2.0)
-            if op_name:
-                r2 = await self._client.get(
-                    f"/v1beta/{op_name}", headers=await self._headers()
-                )
-                if r2.status_code == 404:
-                    raise ColabError(404, f"operation {op_name} not found")
-                if r2.status_code >= 400:
-                    raise ColabError(r2.status_code, "operations.get failed", r2.text)
-                op = r2.json()
-            else:
-                # No operation name: retry the create itself (idempotent via requestId).
-                r = await self._client.post(
-                    "/v1beta/runtimes",
-                    params={"requestId": request_id},
-                    json=body,
-                    headers=await self._headers(),
-                )
-                if r.status_code >= 400:
-                    raise ColabError(r.status_code, "CreateRuntime failed", r.text)
-                op = r.json()
-        if "error" in op and op.get("error"):
-            err = op["error"] or {}
-            reason, msg = _parse_error_details(err)
-            raise ColabError(
-                err.get("code", 9),
-                f"CreateRuntime failed: {msg}" + (f" (reason: {reason})" if reason else ""),
-            )
-        resp = op.get("response") or {}
-        rt = resp.get("runtime") if "runtime" in resp else resp
-        if not rt or not rt.get("connectionInfo"):
-            raise ColabError(0, "CreateRuntime completed without connectionInfo")
-        return self._handle_from_runtime(rt)
+        while asyncio.get_event_loop().time() < deadline:
+            await asyncio.sleep(3.0)
+            try:
+                handle = await self.get_runtime(runtime_id)
+                return handle
+            except RuntimeNotFound:
+                continue  # not assigned yet
+            except ColabError as e:
+                if e.status == 404:
+                    continue
+                raise
+        raise ColabError(0, f"CreateRuntime LRO timed out after {timeout_s:.0f}s")
 
     async def get_runtime(self, runtime_id: str) -> ConnectionHandle:
         """GetRuntime — also the token refresh path (call before expiry-5min)."""

@@ -8,9 +8,14 @@ survive disconnects, browser closure, and runtime reclamation via checkpoint/res
 
 ## What it does
 
-- **Connect once** — one-time Google consent (copy-paste flow, the same mechanism
-  `gcloud auth application-default login` uses). The refresh token is stored on your
-  volume and refreshed server-side forever.
+- **Connect once** — one-time Google consent via the `/connect` page: open the
+  consent URL in the browser where you are signed in to Google, approve it, then
+  copy the `code=4/0A...` value from the browser's **address bar** (after approving,
+  the browser lands on a "This site can't be reached" page — that is expected: the
+  redirect goes to `http://localhost:8080` and nothing is listening) and paste it
+  into `/connect`. Alternatively paste a gcloud ADC credential JSON
+  (`~/.config/gcloud/application_default_credentials.json`). The refresh token is
+  stored on your volume and refreshed server-side forever.
 - **Submit GPU jobs** — `POST /api/jobs` or the dashboard: paste Python code or an
   exported `.ipynb` (notebook mode), pick an accelerator (NONE/T4/L4/A100/H100) and
   shape (STANDARD/HIGHMEM), set a timeout. Jobs run on Colab runtimes via the

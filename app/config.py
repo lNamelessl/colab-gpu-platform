@@ -63,31 +63,41 @@ RUNTIME_CHECKPOINT_DIR = "/content/checkpoints"
 # Public base URL of this platform (for job-code callback conventions).
 PUBLIC_BASE_URL = (os.environ.get("PUBLIC_BASE_URL", "") or "").rstrip("/")
 
-# OAuth client used for the copy-paste consent flow. This is Google's own
-# cloud-SDK OAuth client (the exact config colab-cli ships and gcloud uses),
-# with the registered remote copy-paste redirect page. Reusing another client
-# id with this redirect yields redirect_uri_mismatch.
+# OAuth client used for the consent flow. This is Google's own cloud-SDK
+# OAuth client (the exact config colab-cli ships and gcloud uses).
+#
+# Redirect: loopback copy-paste. Google CHANGED this client's registration —
+# the old https://sdk.cloud.google.com/applicationdefaultauthcode.html landing
+# page now returns redirect_uri_mismatch (400), while loopback
+# http://localhost:8080 is accepted (verified live 2026-11-18). After approval
+# the browser lands on a "can't connect" page; the user copies the code from
+# the ADDRESS BAR (starts "4/0A...") and pastes it into /connect. The exact
+# same redirect_uri string must be sent to the token endpoint at exchange time
+# or Google returns redirect_uri_mismatch there too.
 OAUTH_CLIENT = {
     "client_id": "764086051850-6qr4p6gpi6hn506pt8ejuq83di341hur.apps.googleusercontent.com",
     "client_secret": "d-FL95Q19q7MQmFpd7hHD0Ty",
     "auth_uri": "https://accounts.google.com/o/oauth2/v2/auth",
     "token_uri": "https://oauth2.googleapis.com/token",
-    "redirect_uri": "https://sdk.cloud.google.com/applicationdefaultauthcode.html",
+    "redirect_uri": "http://localhost:8080",
 }
 OAUTH_SCOPES = [
     "openid",
-    "https://www.googleapis.com/auth/userinfo.profile",
-    "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/cloud-platform",
+    "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/colaboratory",
-    "https://www.googleapis.com/auth/drive.file",
 ]
 
 COLAB_API_BASE = "https://colaboratory.googleapis.com"
 CLIENT_AGENT = "colab-gpu-platform/1.0"
 
 def consent_url(state: str = "") -> str:
-    """The one-time consent URL the user opens in their own browser."""
+    """The one-time consent URL the user opens in their own browser.
+
+    Loopback redirect: nothing needs to listen on localhost:8080 — after
+    approval the browser shows a connection error and the user copies the
+    authorization code from the address bar into /connect.
+    """
     from urllib.parse import urlencode
     params = {
         "client_id": OAUTH_CLIENT["client_id"],
@@ -96,7 +106,6 @@ def consent_url(state: str = "") -> str:
         "scope": " ".join(OAUTH_SCOPES),
         "access_type": "offline",
         "prompt": "consent",
-        "token_usage": "remote",
     }
     if state:
         params["state"] = state

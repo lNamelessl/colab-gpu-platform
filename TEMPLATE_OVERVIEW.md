@@ -51,11 +51,19 @@ added post-deploy.
 ## Deploy
 
 1. Click the deploy button. The deploy form asks for **`GOOGLE_CREDENTIALS_JSON`**:
-   on your own machine run
-   `gcloud auth application-default login --scopes=openid,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/colaboratory`,
-   then paste the contents of `~/.config/gcloud/application_default_credentials.json`
-   (or, after deploy, use the `/connect` page: open the consent URL, paste the
-   authorization code).
+   get a refresh-token credential one of two ways:
+   - **Loopback copy-paste (zero setup)**: after deploy, open `/connect` on your
+     platform URL, copy the consent URL into the browser where you are signed in
+     to Google, approve it — the browser then lands on a "This site can't be
+     reached" page (expected; the redirect goes to `http://localhost:8080` and
+     nothing is listening). Copy the `code=4/0A...` value from the **address bar**
+     and paste it into the `/connect` form — the platform exchanges it server-side
+     and stores the refresh token on the volume.
+   - **gcloud ADC**: run
+     `gcloud auth application-default login --scopes=openid,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/colaboratory`
+     locally and paste the contents of
+     `~/.config/gcloud/application_default_credentials.json` into the
+     `GOOGLE_CREDENTIALS_JSON` deploy prompt.
 2. Railway provisions one service + a `/data` volume (credential, SQLite jobs/runs,
    checkpoints, artifacts) and a public domain with a `/health` healthcheck.
 3. Open the domain → submit a job from the dashboard or `POST /api/jobs`.

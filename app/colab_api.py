@@ -100,13 +100,16 @@ class ColabClient:
         )
 
     async def create_runtime(self, accelerator: str, shape: str,
-                             timeout_s: float = 420.0) -> ConnectionHandle:
+                             timeout_s: float = 900.0) -> ConnectionHandle:
         """CreateRuntime (LRO) + poll until live. Returns live connection.
 
         Readiness: the LRO's metadata carries the runtime name immediately; we
         poll GetRuntime on that id until it returns connectionInfo. (The
         operations.get/:wait endpoints 404 at this host — verified 2026-11-18
         — so GetRuntime polling is the only working readiness signal.)
+        Under load the assignment can take many minutes; the default timeout
+        is deliberately generous (900s) — Colab's own client waits 200s and
+        gives up on stockouts, but we prefer waiting through pacing.
         """
         request_id = str(uuid.uuid4())
         body = {"runtimeSpec": spec_key(accelerator, shape)}

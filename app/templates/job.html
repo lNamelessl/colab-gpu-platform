@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}{{ ctx.job.name }} — Colab GPU Platform{% endblock %}
+{% block body %}
+<div class="panel">
+  <h2>{{ ctx.job.name }}
+    {% if ctx.job.latest %}
+    {% endif %}
+  </h2>
+  <p class="muted mono">
+    id {{ ctx.job.id }} · accelerator {{ ctx.job.accelerator }} · shape {{ ctx.job.shape }} ·
+    timeout {{ ctx.job.timeout_min }} min ·
+    schedule {{ ctx.job.schedule or '—' }} · notebook mode {{ 'yes' if ctx.job.notebook else 'no' }}
+  </p>
+  <div class="row">
+    <button class="primary" onclick="rerunJob('{{ ctx.job.id }}')">Run now</button>
+    <button onclick="delJob('{{ ctx.job.id }}')">Delete job</button>
+    {% if ctx.checkpoint %}<span class="badge">checkpoint: {{ ctx.checkpoint.files|length }} file(s), attempt {{ ctx.checkpoint.attempt }}</span>{% endif %}
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Runs</h2>
+  <table>
+    <tr><th>Run</th><th>Attempt</th><th>Trigger</th><th>Status</th><th>Runtime</th><th>Queued</th><th>Finished</th><th></th></tr>
+    {% for r in ctx.runs %}
+    <tr>
+      <td class="mono"><a href="#" onclick="loadRun('{{ r.id }}'); return false;">{{ r.id[:8] }}</a></td>
+      <td>{{ r.attempt }}{% if r.restored_checkpoint %} <span class="badge ok">ckpt restored</span>{% endif %}</td>
+      <td>{{ r.trigger }}</td>
+      <td class="st-{{ r.status }}">{{ r.status }}{% if r.error %}<br><span class="muted">{{ r.error[:120] }}</span>{% endif %}</td>
+      <td class="mono">{{ (r.runtime_id or '—')[:16] }}</td>
+      <td class="mono">{{ r.queued_at }}</td>
+      <td class="mono">{{ r.finished_at or '—' }}</td>
+      <td><button onclick="loadRun('{{ r.id }}')">View log</button></td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<div class="panel">
+  <h2>Live output <span id="log-status" class="muted"></span></h2>
+  <pre id="log">select a run above…</pre>
+</div>
+
+<div class="panel">
+  <h2>Artifacts</h2>
+  {% if not ctx.artifacts %}<p class="muted">No artifacts yet. Job code can write files to <code>/content/artifacts</code> — they are fetched to the platform volume when the job completes.</p>
+  {% else %}
+  <table>
+    <tr><th>File</th><th>Size</th><th>Run</th><th>Download</th></tr>
+    {% for a in ctx.artifacts %}
+    <tr><td class="mono">{{ a.path }}</td><td>{{ a.size }} B</td><td class="mono">{{ a.run_id[:8] }}</td>
+    <td><a href="/api/artifacts/{{ a.id }}/download">download</a></td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Checkpoint contract</h2>
+  <p class="muted">
+    Long jobs should call <code>platform_checkpoint()</code> periodically (it is defined in the
+    execution prelude): it snapshots <code>CHECKPOINT_PATH</code> (default
+    <code>/content/checkpoints/&lt;job_id&gt;</code>) to the platform volume. If Colab reclaims the
+    runtime mid-run, the run is marked RECLAIMED and a new attempt is auto-enqueued — the checkpoint
+    is re-uploaded to the fresh runtime <b>before your code runs again</b>. No synthetic keep-alive
+    is ever sent; reclaimed runtimes are expected and handled.
+  </p>
+</div>
+
+<script>
+let ws = null;
+function loadRun(runId) {
+  if (ws) { ws.close(); ws = null; }
+  const logEl = document.getElementById('log');
+  const statusEl = document.getElementById('log-status');
+  logEl.textContent = '';
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(proto + '://' + location.host + '/api/jobs/{{ ctx.job.id }}/stream?run_id=' + runId);
+  ws.onmessage = (m) => {
+    if (m.data.startsWith('--- run ')) { statusEl.textContent = m.data.slice(4); return; }
+    logEl.textContent += m.data + '\n';
+    logEl.scrollTop = logEl.scrollHeight;
+  };
+  ws.onclose = () => { statusEl.textContent = 'stream closed'; };
+}
+async function rerunJob(id) {
+  const r = await fetch('/api/jobs/' + id + '/run', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+  if (r.ok) location.reload(); else alert(JSON.stringify(await r.json().catch(() => ({}))));
+}
+async function delJob(id) {
+  if (!confirm('Delete job and all runs?')) return;
+  const r = await fetch('/api/jobs/' + id, {method:'DELETE'});
+  if (r.ok) location.href = '/'; else alert(JSON.stringify(await r.json().catch(() => ({}))));
+}
+// auto-load latest run
+{% if ctx.runs %}loadRun('{{ ctx.runs[0].id }}');{% endif %}
+</script>
+{% endblock %}

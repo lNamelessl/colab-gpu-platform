@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Artifacts — Colab GPU Platform{% endblock %}
+{% block body %}
+<div class="panel">
+  <h2>Artifacts (stored on the platform volume)</h2>
+  {% if not ctx.artifacts %}<p class="muted">No artifacts yet.</p>
+  {% else %}
+  <table>
+    <tr><th>File</th><th>Job</th><th>Run</th><th>Size</th><th>Stored</th><th></th></tr>
+    {% for a in ctx.artifacts %}
+    <tr>
+      <td class="mono">{{ a.path }}</td>
+      <td><a href="/jobs/{{ a.job_id }}">{{ a.job_id[:8] }}</a></td>
+      <td class="mono">{{ a.run_id[:8] }}</td>
+      <td>{{ a.size }} B</td>
+      <td class="mono">{{ a.created_at }}</td>
+      <td><a href="/api/artifacts/{{ a.id }}/download">download</a></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+</div>
+{% endblock %}

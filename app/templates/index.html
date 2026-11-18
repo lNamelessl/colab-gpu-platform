@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="panel">
+  <h2>New GPU job</h2>
+  {% if not ctx.connected %}
+  <div class="flash err">Not connected to Google. <a href="/connect">Complete the one-time consent</a> first — jobs need a Colab runtime to run on.</div>
+  {% endif %}
+  <form onsubmit="submitJob(event)">
+    <div class="row">
+      <div><label>Job name</label><input id="j-name" value="hello-gpu"></div>
+      <div>
+        <label>Accelerator</label>
+        <select id="j-acc"><option>NONE</option><option>T4</option><option>L4</option><option>A100</option><option>H100</option></select>
+      </div>
+      <div>
+        <label>Shape</label>
+        <select id="j-shape"><option>STANDARD</option><option>HIGHMEM</option></select>
+      </div>
+      <div><label>Timeout (min, 1–720)</label><input id="j-timeout" type="number" value="30" min="1" max="720"></div>
+    </div>
+    <div class="row">
+      <div><label>Schedule (cron, optional — e.g. */15 * * * *)</label><input id="j-schedule" placeholder="leave empty to run now"></div>
+      <div><label>Webhook URL (optional)</label><input id="j-webhook" placeholder="https://discord.com/api/webhooks/..."></div>
+    </div>
+    <label>Python code (or paste an exported .ipynb JSON below with notebook mode)</label>
+    <textarea id="j-code">import sys, platform
+print("python:", sys.version)
+print("machine:", platform.machine())</textarea>
+    <div class="row" style="margin-top:8px">
+      <div>
+        <label>Notebook mode: paste .ipynb JSON instead (overrides code)</label>
+        <textarea id="j-notebook" style="min-height:80px" placeholder='{"cells":[...],"nbformat":4}'></textarea>
+      </div>
+    </div>
+    <div style="margin-top:12px">
+      <button class="primary" type="submit" {{ '' if ctx.connected else 'disabled' }}>Submit job</button>
+      <span id="j-result" class="muted"></span>
+    </div>
+  </form>
+</div>
+
+<div class="panel">
+  <h2>Jobs</h2>
+  {% if not ctx.jobs %}
+  <p class="muted">No jobs yet.</p>
+  {% else %}
+  <table>
+    <tr><th>Name</th><th>Spec</th><th>Schedule</th><th>Runs</th><th>Latest run</th><th></th></tr>
+    {% for j in ctx.jobs %}
+    <tr>
+      <td><a href="/jobs/{{ j.id }}">{{ j.name }}</a></td>
+      <td class="mono">{{ j.accelerator }}/{{ j.shape }}</td>
+      <td class="mono">{{ j.schedule or '—' }}</td>
+      <td>{{ j.run_count }}</td>
+      <td class="mono">
+        {% if j.latest_run %}
+          <span class="st-{{ j.latest_run.status }}">{{ j.latest_run.status }}</span>
+          <span class="muted">attempt {{ j.latest_run.attempt }}</span>
+        {% else %}—{% endif %}
+      </td>
+      <td><button onclick="rerunJob('{{ j.id }}')">Run now</button></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Platform</h2>
+  <p class="muted">
+    Runtime reuse: <b>{{ 'on (idle TTL {{ 300 }}s)' if ctx.runtime_reuse else 'off (runtime deleted on job completion)' }}</b>
+    · max concurrent jobs: <b>{{ ctx.max_concurrent }}</b>
+    · webhook: <b>{{ 'configured' if ctx.notify_configured else 'not set (NOTIFY_WEBHOOK_URL)' }}</b>
+  </p>
+  <p class="muted">Honest limits: free tier caps runtimes at 12 h and idle runtimes are reclaimed
+  by Colab by design — checkpoint/resume is the reliability mechanism, never keep-alive.
+  <a href="https://research.google.com/colaboratory/faq.html" target="_blank">Colab FAQ</a></p>
+</div>
+
+<script>
+async function submitJob(e) {
+  e.preventDefault();
+  const body = {
+    name: document.getElementById('j-name').value,
+    code: document.getElementById('j-code').value,
+    accelerator: document.getElementById('j-acc').value,
+    shape: document.getElementById('j-shape').value,
+    timeout_min: parseInt(document.getElementById('j-timeout').value || '30'),
+    schedule: document.getElementById('j-schedule').value,
+    webhook_url: document.getElementById('j-webhook').value,
+  };
+  const nb = document.getElementById('j-notebook').value.trim();
+  if (nb) body.notebook_json = nb;
+  const r = await fetch('/api/jobs', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  const d = await r.json().catch(() => ({}));
+  const el = document.getElementById('j-result');
+  if (r.ok) { el.textContent = 'queued run ' + (d.run ? d.run.id.slice(0,8) : ''); setTimeout(() => location.reload(), 600); }
+  else { el.textContent = 'error: ' + JSON.stringify(d.detail || d); el.style.color = '#f85149'; }
+}
+async function rerunJob(id) {
+  const r = await fetch('/api/jobs/' + id + '/run', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+  if (r.ok) location.href = '/jobs/' + id;
+  else alert(JSON.stringify(await r.json().catch(() => ({}))));
+}
+</script>
+{% endblock %}

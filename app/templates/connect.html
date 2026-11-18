@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Connect — Colab GPU Platform{% endblock %}
+{% block body %}
+<div class="panel">
+  <h2>Step 1 — open the consent URL in your browser</h2>
+  <p>Copy this URL into <b>any browser</b> (the one where you are signed in to your Google account),
+     approve the consent screen, then copy the <b>authorization code</b> Google shows you and paste it below.</p>
+  <pre id="consent-url">{{ ctx.consent_url }}</pre>
+  <button onclick="navigator.clipboard.writeText(document.getElementById('consent-url').textContent.trim())">Copy consent URL</button>
+  <p class="muted">Scopes requested: openid, userinfo.profile, userinfo.email, cloud-platform, colaboratory, drive.file.
+  This uses Google's own cloud-SDK OAuth client with the copy-paste consent page — the same flow
+  <code>gcloud auth application-default login</code> and colab-cli use.</p>
+</div>
+
+<div class="panel">
+  <h2>Step 2 — paste the authorization code (or a full credential JSON)</h2>
+  <label>Authorization code (from the consent page)</label>
+  <textarea id="c-code" style="min-height:70px" placeholder="4/0A..."></textarea>
+  <label>— or — credential JSON (contents of ~/.config/gcloud/application_default_credentials.json)</label>
+  <textarea id="c-json" style="min-height:110px" placeholder='{"refresh_token":"...","client_id":"...","client_secret":"...", ...}'></textarea>
+  {% if ctx.password_protected %}<label>Platform password (X-Platform-Password)</label><input id="c-pw" type="password">{% endif %}
+  <div style="margin-top:12px">
+    <button class="primary" onclick="doConnect()">Connect</button>
+    <span id="c-result" class="muted"></span>
+  </div>
+</div>
+
+{% if ctx.connected %}
+<div class="panel">
+  <h2>Connected</h2>
+  <p>
+    {{ ctx.identity.email if ctx.identity and ctx.identity.email else 'Google account connected' }}
+  </p>
+  <form onsubmit="doDisconnect(event)">
+    {% if ctx.password_protected %}<label>Platform password</label><input id="d-pw" type="password">{% endif %}
+    <button onclick="event.preventDefault(); doDisconnect()">Disconnect (deletes stored credential)</button>
+  </form>
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2>Alternative: gcloud ADC</h2>
+  <p>On your own machine run:</p>
+  <pre>gcloud auth application-default login \
+    --scopes=openid,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/colaboratory</pre>
+  <p>then paste the contents of <code>~/.config/gcloud/application_default_credentials.json</code> into the
+  credential JSON field above — or set the <code>GOOGLE_CREDENTIALS_JSON</code> Railway variable to it.</p>
+</div>
+
+<script>
+async function doConnect() {
+  const body = {};
+  const code = document.getElementById('c-code').value.trim();
+  const cj = document.getElementById('c-json').value.trim();
+  if (code) body.code = code;
+  if (cj) body.credential_json = cj;
+  const pw = document.getElementById('c-pw');
+  if (pw) body.password = pw.value;
+  const el = document.getElementById('c-result');
+  const r = await fetch('/api/connect', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  const d = await r.json().catch(() => ({}));
+  if (r.ok && d.ok) {
+    el.textContent = 'connected! Colab check: ' + d.colab_check;
+    el.style.color = '#3fb950';
+    setTimeout(() => location.href = '/', 1200);
+  } else {
+    el.textContent = JSON.stringify(d.detail || d);
+    el.style.color = '#f85149';
+  }
+}
+async function doDisconnect() {
+  const pw = document.getElementById('d-pw');
+  const body = pw ? {password: pw.value} : {};
+  const r = await fetch('/api/disconnect', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  if (r.ok) location.reload();
+}
+</script>
+{% endblock %}

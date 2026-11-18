@@ -203,6 +203,12 @@ class Worker:
                     await db.update_run(run["id"], restored_checkpoint=1)
 
             await client.create_session(f"job-{job['id'][:8]}-{run['id'][:8]}")
+            # Cold runtimes keep the kernel in "starting" for a while; the
+            # proxy drops WS connections made before the kernel is ready.
+            state = await client.wait_kernel_idle(timeout_s=240)
+            await _log(run, f"kernel state: {state}")
+            if state in ("dead", "error"):
+                raise JupyterError(f"kernel did not start (state: {state})")
 
             # ---- execute ----
             await db.update_run(run["id"], status="RUNNING")

@@ -173,21 +173,50 @@ class Worker:
             f"accelerator={job['accelerator']} shape={job['shape']}",
         )
 
-        # ---- provision ----
-        try:
-            handle = await self._manager.acquire(
-                job["accelerator"], job["shape"], log_fn=lambda s: _log(run, s)
-            )
-        except Exception as e:  # noqa: BLE001
-            msg = friendly_create_error(e)
+        # ---- provision (with broken-VM retry: a fresh runtime whose kernel
+        # never leaves "starting" is hung — tear it down and reprovision) ----
+        client: JupyterClient | None = None
+        handle = None
+        for attempt_vm in range(3):
+            try:
+                handle = await self._manager.acquire(
+                    job["accelerator"], job["shape"], log_fn=lambda s: _log(run, s)
+                )
+            except Exception as e:  # noqa: BLE001
+                msg = friendly_create_error(e)
+                await db.update_run(run["id"], status="FAILED", error=msg, finished_at=db.now())
+                await _log(run, f"PROVISION FAILED: {msg}")
+                await fire_event("FAILED", job, run, msg)
+                return
+            await db.update_run(run["id"], runtime_id=handle.runtime_id)
+            handle = await self._manager.ensure_fresh(handle)
+            client = JupyterClient(handle)
+            adopted = False
+            try:
+                await client.create_session(f"job-{job['id'][:8]}-{run['id'][:8]}")
+                state = await client.wait_kernel_idle(timeout_s=300)
+                await _log(run, f"boot probe on {handle.runtime_id[:14]}: kernel state {state}")
+                if state == "idle":
+                    adopted = True
+                    break
+                await _log(run, f"runtime VM looks hung (state={state}); reprovisioning...")
+            finally:
+                if not adopted:
+                    try:
+                        await client.delete_session()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    await client.close()
+                    await self._manager.release(handle.runtime_id, delete=True)
+                    client = None
+                    handle = None
+        if client is None or handle is None:
+            msg = "provisioning failed: 3 runtimes booted broken kernels"
             await db.update_run(run["id"], status="FAILED", error=msg, finished_at=db.now())
             await _log(run, f"PROVISION FAILED: {msg}")
             await fire_event("FAILED", job, run, msg)
             return
-        await db.update_run(run["id"], runtime_id=handle.runtime_id)
-        handle = await self._manager.ensure_fresh(handle)
 
-        client = JupyterClient(handle)
         deadline = job["timeout_min"] * 60
         try:
             # ---- setup: upload code ----
@@ -201,14 +230,6 @@ class Worker:
                 restored = await self._restore_checkpoint(job, run, client)
                 if restored:
                     await db.update_run(run["id"], restored_checkpoint=1)
-
-            await client.create_session(f"job-{job['id'][:8]}-{run['id'][:8]}")
-            # Cold runtimes keep the kernel in "starting" for a while; the
-            # proxy drops WS connections made before the kernel is ready.
-            state = await client.wait_kernel_idle(timeout_s=240)
-            await _log(run, f"kernel state: {state}")
-            if state in ("dead", "error"):
-                raise JupyterError(f"kernel did not start (state: {state})")
 
             # ---- execute ----
             await db.update_run(run["id"], status="RUNNING")

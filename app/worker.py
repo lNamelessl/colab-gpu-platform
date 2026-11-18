@@ -177,7 +177,7 @@ class Worker:
         # never leaves "starting" is hung — tear it down and reprovision) ----
         client: JupyterClient | None = None
         handle = None
-        for attempt_vm in range(3):
+        for attempt_vm in range(int(os.environ.get("PROVISION_RETRIES", "5"))):
             try:
                 handle = await self._manager.acquire(
                     job["accelerator"], job["shape"], log_fn=lambda s: _log(run, s)
@@ -194,7 +194,7 @@ class Worker:
             adopted = False
             try:
                 await client.create_session(f"job-{job['id'][:8]}-{run['id'][:8]}")
-                state = await client.wait_kernel_idle(timeout_s=300)
+                state = await client.wait_kernel_idle(timeout_s=420)
                 await _log(run, f"boot probe on {handle.runtime_id[:14]}: kernel state {state}")
                 if state == "idle":
                     adopted = True
@@ -211,7 +211,7 @@ class Worker:
                     client = None
                     handle = None
         if client is None or handle is None:
-            msg = "provisioning failed: 3 runtimes booted broken kernels"
+            msg = "provisioning failed: repeated runtimes booted broken kernels (Colab VM pacing)"
             await db.update_run(run["id"], status="FAILED", error=msg, finished_at=db.now())
             await _log(run, f"PROVISION FAILED: {msg}")
             await fire_event("FAILED", job, run, msg)

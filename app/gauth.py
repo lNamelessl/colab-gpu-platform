@@ -49,8 +49,23 @@ def _normalize(raw: dict) -> dict:
         "client_secret": raw.get("client_secret") or config.OAUTH_CLIENT["client_secret"],
         "token_uri": raw.get("token_uri") or "https://oauth2.googleapis.com/token",
         "scopes": raw.get("scopes") or config.OAUTH_SCOPES,
+        "quota_project_id": raw.get("quota_project_id")
+        or config.QUOTA_PROJECT_ID
+        or "",
     }
     return out
+
+
+def _make_credentials(norm: dict, access_token: str | None = None) -> Credentials:
+    return Credentials(
+        token=access_token,
+        refresh_token=norm["refresh_token"],
+        token_uri=norm["token_uri"],
+        client_id=norm["client_id"],
+        client_secret=norm["client_secret"],
+        scopes=norm["scopes"],
+        quota_project_id=norm.get("quota_project_id") or None,
+    )
 
 
 def store_credential(raw: dict) -> dict:
@@ -58,14 +73,7 @@ def store_credential(raw: dict) -> dict:
     global _cached_creds, _identity
     norm = _normalize(raw)
     # Prove the refresh token actually works before storing anything.
-    creds = Credentials(
-        token=None,
-        refresh_token=norm["refresh_token"],
-        token_uri=norm["token_uri"],
-        client_id=norm["client_id"],
-        client_secret=norm["client_secret"],
-        scopes=norm["scopes"],
-    )
+    creds = _make_credentials(norm)
     creds.refresh(Request())
     if not creds.token:
         raise CredentialError("refresh failed: no access token returned")
@@ -77,6 +85,7 @@ def store_credential(raw: dict) -> dict:
         "ok": True,
         "client_id_tail": norm["client_id"][-12:],
         "scopes": norm["scopes"],
+        "quota_project_id": norm.get("quota_project_id") or None,
     }
 
 
@@ -108,14 +117,7 @@ def load_credential() -> Credentials | None:
     except (ValueError, CredentialError, OSError) as e:
         log.warning("stored credential unreadable: %s", e)
         return None
-    creds = Credentials(
-        token=None,
-        refresh_token=norm["refresh_token"],
-        token_uri=norm["token_uri"],
-        client_id=norm["client_id"],
-        client_secret=norm["client_secret"],
-        scopes=norm["scopes"],
-    )
+    creds = _make_credentials(norm)
     try:
         creds.refresh(Request())
     except Exception as e:  # noqa: BLE001

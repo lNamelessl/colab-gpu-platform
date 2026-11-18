@@ -208,11 +208,37 @@ async def api_connect(request: Request, body: dict):
             raw = json.loads(body["json"])
         else:
             raise HTTPException(400, "provide 'code' (authorization code) or 'credential_json'")
+        if body.get("quota_project_id"):
+            raw["quota_project_id"] = body["quota_project_id"].strip()
+        elif not raw.get("quota_project_id") and config.QUOTA_PROJECT_ID:
+            raw["quota_project_id"] = config.QUOTA_PROJECT_ID
         summary = gauth.store_credential(raw)
     except gauth.CredentialError as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
     except ValueError as e:
         return JSONResponse(status_code=400, content={"error": f"invalid JSON: {e}"})
+    # Quota project: the Colab API rejects ADC user creds without one. Best
+    # effort: enable the Colab API on the given project (needs cloud-platform).
+    quota = summary.get("quota_project_id")
+    enable_note = None
+    if quota:
+        try:
+            import httpx as _httpx
+            tok = await gauth.access_token()
+            async with _httpx.AsyncClient(timeout=60) as ac:
+                er = await ac.post(
+                    f"https://serviceusage.googleapis.com/v1/projects/{quota}"
+                    "/services/colaboratory.googleapis.com:enable",
+                    headers={"Authorization": f"Bearer {tok}"},
+                )
+                enable_note = f"enable {quota}: HTTP {er.status_code}"
+        except Exception as e:  # noqa: BLE001
+            enable_note = f"enable attempt failed: {e}"
+    elif not quota:
+        enable_note = (
+            "no quota_project_id supplied — Colab API calls will 403 "
+            "(SERVICE_DISABLED) until a Google Cloud project ID is provided"
+        )
     # prove Colab access with a real call
     specs_error = None
     try:
@@ -225,7 +251,8 @@ async def api_connect(request: Request, body: dict):
         ]
     except Exception as e:  # noqa: BLE001
         specs_error = friendly_create_error(e)
-    return {"ok": True, "credential": summary, "colab_check": specs_error or "passed"}
+    return {"ok": True, "credential": summary, "colab_check": specs_error or "passed",
+            "quota_project": quota, "enable_note": enable_note}
 
 
 @router.post("/api/disconnect")

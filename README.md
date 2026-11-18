@@ -12,10 +12,11 @@ survive disconnects, browser closure, and runtime reclamation via checkpoint/res
   consent URL in the browser where you are signed in to Google, approve it, then
   copy the `code=4/0A...` value from the browser's **address bar** (after approving,
   the browser lands on a "This site can't be reached" page — that is expected: the
-  redirect goes to `http://localhost:8080` and nothing is listening) and paste it
-  into `/connect`. Alternatively paste a gcloud ADC credential JSON
-  (`~/.config/gcloud/application_default_credentials.json`). The refresh token is
-  stored on your volume and refreshed server-side forever.
+  redirect goes to `http://localhost:8080` and nothing is listening), paste it into
+  `/connect` **together with a quota project ID** (any of your Google Cloud project
+  IDs — the Colab API requires one; the platform auto-enables the Colab API on it).
+  Alternatively paste a gcloud ADC credential JSON with a `"quota_project_id"` key
+  added. The refresh token is stored on your volume and refreshed server-side forever.
 - **Submit GPU jobs** — `POST /api/jobs` or the dashboard: paste Python code or an
   exported `.ipynb` (notebook mode), pick an accelerator (NONE/T4/L4/A100/H100) and
   shape (STANDARD/HIGHMEM), set a timeout. Jobs run on Colab runtimes via the
@@ -51,6 +52,7 @@ survive disconnects, browser closure, and runtime reclamation via checkpoint/res
 | Variable | Required | Purpose |
 |---|---|---|
 | `GOOGLE_CREDENTIALS_JSON` | **yes (deploy-form prompt)** | The one prompt. Paste a refresh-token credential JSON (gcloud ADC file contents, or the authorization-code exchange from `/connect`). Invalid JSON degrades to keyless mode with a loud log banner — fix it at `/connect`. |
+| `QUOTA_PROJECT_ID` | recommended | A Google Cloud project ID of yours where the Colab API is enabled — the Colab API rejects ADC user credentials without a quota project (`x-goog-user-project`). The `/connect` form can set/save it (and auto-enable `colaboratory.googleapis.com` on the project); or bake `"quota_project_id": "my-project"` into the pasted credential JSON. |
 | `APP_ACCESS_PASSWORD` | no (auto-generated per deploy) | Gates mutations (jobs, connect, delete). Reads stay open (job ids are unguessable). Send as `X-Platform-Password` header or `?password=`. |
 | `NOTIFY_WEBHOOK_URL` | no | Discord-style JSON POST on COMPLETE/FAILED/RECLAIMED. |
 | `RUNTIME_REUSE` | no (default `false`) | Reuse one runtime across consecutive jobs instead of delete-on-completion. Idle reused runtimes are deleted after `RUNTIME_REUSE_TTL_S` (300 s default). |

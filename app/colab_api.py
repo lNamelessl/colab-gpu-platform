@@ -205,6 +205,17 @@ def friendly_create_error(e: Exception) -> str:
     if isinstance(e, ColabError):
         text = f"{e} | body={e.body[:400]}" if e.body else str(e)
         low = text.lower()
+        if "quota project" in low or "service_disabled" in low:
+            return (
+                "Colab API needs a quota project: reconnect with your Google "
+                "Cloud project ID (the platform enables the Colab API on it)."
+            )
+        if "has not been used in project" in low or "it is disabled" in low:
+            return (
+                "Colab API is not enabled on the quota project yet — enable "
+                "propagation can take a minute; retry, or run `gcloud services "
+                "enable colaboratory.googleapis.com --project <id>`."
+            )
         if "quota" in low:
             return "Colab refused the runtime: insufficient quota / compute units exhausted."
         if "stockout" in low or "unavailable" in low or "capacity" in low:

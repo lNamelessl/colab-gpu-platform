@@ -56,13 +56,17 @@ added post-deploy.
      platform URL, copy the consent URL into the browser where you are signed in
      to Google, approve it — the browser then lands on a "This site can't be
      reached" page (expected; the redirect goes to `http://localhost:8080` and
-     nothing is listening). Copy the `code=4/0A...` value from the **address bar**
-     and paste it into the `/connect` form — the platform exchanges it server-side
-     and stores the refresh token on the volume.
+     nothing is listening). Copy the `code=4/0A...` value from the **address bar**,
+     enter a **quota project ID** (any of your Google Cloud project IDs — the Colab
+     API requires one; the platform auto-enables `colaboratory.googleapis.com` on
+     it), and submit — the platform exchanges the code server-side and stores the
+     refresh token on the volume.
    - **gcloud ADC**: run
      `gcloud auth application-default login --scopes=openid,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/colaboratory`
-     locally and paste the contents of
-     `~/.config/gcloud/application_default_credentials.json` into the
+     locally, run `gcloud services enable colaboratory.googleapis.com --project <your-project-id>`,
+     then paste the contents of
+     `~/.config/gcloud/application_default_credentials.json` (plus a
+     `"quota_project_id": "<your-project-id>"` key) into the
      `GOOGLE_CREDENTIALS_JSON` deploy prompt.
 2. Railway provisions one service + a `/data` volume (credential, SQLite jobs/runs,
    checkpoints, artifacts) and a public domain with a `/health` healthcheck.
@@ -83,10 +87,12 @@ One Railway service (Python 3.12 / FastAPI) with a persistent `/data` volume:
 Deploy-form variables:
 
 - `GOOGLE_CREDENTIALS_JSON` (required) — refresh-token credential JSON for your
-  Google account (gcloud ADC file contents, or paste the authorization code at
-  `/connect` post-deploy).
+  Google account (gcloud ADC file contents + `quota_project_id` key, or paste the
+  authorization code + quota project ID at `/connect` post-deploy).
 - `APP_ACCESS_PASSWORD` — auto-generated per deploy (`${{secret(24)}}`), shown in
   the Variables tab; gates all mutations.
+- `QUOTA_PROJECT_ID` (optional) — your Google Cloud project ID used as the Colab
+  API quota project (`x-goog-user-project`); settable per-deploy or at `/connect`.
 
 ## Why Deploy
 
@@ -116,7 +122,11 @@ all of it working, on one service and one volume.
 - A Google account with Colab access (free tier works; Pro/Pro+ raise limits and
   unlock A100/H100) and one-time consent via the `/connect` page or the
   `gcloud auth application-default login` command above. The credential refreshes
-  server-side forever; nothing else is required.
+  server-side forever.
+- A Google Cloud project used as the Colab API **quota project** (any active
+  project of yours; the platform auto-enables `colaboratory.googleapis.com` on it
+  at connect time). Without it the Colab API returns 403 SERVICE_DISABLED for
+  ADC user credentials.
 - No external database, no other services: SQLite on the volume.
 - Colab API v1beta is Google's beta API; usage is subject to Colab's quotas and
   Terms of Service (batch orchestration on your own account — no hosted web

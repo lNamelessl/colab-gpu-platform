@@ -20,6 +20,9 @@
   <textarea id="c-code" style="min-height:70px" placeholder="4/0A..."></textarea>
   <label>— or — credential JSON (contents of ~/.config/gcloud/application_default_credentials.json)</label>
   <textarea id="c-json" style="min-height:110px" placeholder='{"refresh_token":"...","client_id":"...","client_secret":"...", ...}'></textarea>
+  <label>Quota project ID (required by the Colab API — any of your Google Cloud project IDs;
+    the platform auto-enables colab.googleapis.com on it)</label>
+  <input id="c-quota" placeholder="my-project-123">
   {% if ctx.password_protected %}<label>Platform password (X-Platform-Password)</label><input id="c-pw" type="password">{% endif %}
   <div style="margin-top:12px">
     <button class="primary" onclick="doConnect()">Connect</button>
@@ -56,6 +59,8 @@ async function doConnect() {
   const cj = document.getElementById('c-json').value.trim();
   if (code) body.code = code;
   if (cj) body.credential_json = cj;
+  const q = document.getElementById('c-quota').value.trim();
+  if (q) body.quota_project_id = q;
   const pw = document.getElementById('c-pw');
   if (pw) body.password = pw.value;
   const el = document.getElementById('c-result');

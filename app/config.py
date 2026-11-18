@@ -91,6 +91,13 @@ OAUTH_SCOPES = [
 COLAB_API_BASE = "https://colaboratory.googleapis.com"
 CLIENT_AGENT = "colab-gpu-platform/1.0"
 
+# The Colab API requires a quota project for ADC user credentials: every call
+# must carry x-goog-user-project pointing at a Google Cloud project where the
+# Colab API is enabled (SERVICE_DISABLED / PERMISSION_DENIED otherwise).
+# Sources, in order: the credential JSON's "quota_project_id" key, this env
+# var, or the /connect form.
+QUOTA_PROJECT_ID = os.environ.get("QUOTA_PROJECT_ID", "") or ""
+
 def consent_url(state: str = "") -> str:
     """The one-time consent URL the user opens in their own browser.
 

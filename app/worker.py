@@ -330,6 +330,11 @@ class Worker:
             return 0
         src_root = Path(config.DATA_DIR) / "checkpoints" / job["id"]
         ck_dir = f"{config.RUNTIME_CHECKPOINT_DIR}/{job['id']}"
+        try:
+            await client.mkdirs(ck_dir)
+        except Exception as e:  # noqa: BLE001
+            await _log(run, f"checkpoint dir create failed: {e}")
+            return 0
         n = 0
         for f in manifest["files"]:
             src = src_root / f["name"]

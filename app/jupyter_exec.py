@@ -127,7 +127,28 @@ class JupyterClient:
             pass
 
     # ---- contents ----
+    async def mkdirs(self, path: str) -> None:
+        """Create a directory (and parents) via the Contents API.
+
+        The Contents API does NOT auto-create intermediate directories on file
+        PUTs — each level must exist first (HTTP 500 otherwise).
+        """
+        parts = [p for p in path.strip("/").split("/") if p]
+        cur = ""
+        for p in parts:
+            cur = f"{cur}/{p}"
+            r = await self._http.put(f"/api/contents/{quote(cur.lstrip('/'))}",
+                                     json={"type": "directory"})
+            if r.status_code not in (200, 201):
+                # 400 "already exists"-style responses are fine to ignore too
+                if r.status_code not in (400, 409):
+                    raise JupyterError(f"mkdir {cur} failed: HTTP {r.status_code} {r.text[:200]}")
+
     async def upload_file(self, path: str, data: bytes) -> None:
+        # ensure the parent directory chain exists (500 without it)
+        parent = path.rsplit("/", 1)[0]
+        if parent and parent != path:
+            await self.mkdirs(parent)
         if len(data) > 45 * 1024 * 1024:
             raise JupyterError(f"file {path} exceeds the 45MB single-request cap")
         payload = {

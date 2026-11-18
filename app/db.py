@@ -74,6 +74,12 @@ class DB:
         self.path = path
         self._conn: aiosqlite.Connection | None = None
 
+    def now(self) -> str:
+        return now()
+
+    def new_id(self) -> str:
+        return new_id()
+
     async def connect(self):
         self._conn = await aiosqlite.connect(self.path)
         self._conn.row_factory = aiosqlite.Row

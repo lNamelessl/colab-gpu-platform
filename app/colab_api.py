@@ -147,6 +147,12 @@ class ColabClient:
                 if e.status == 404:
                     continue
                 raise
+        # Orphan cleanup: the LRO may still assign later — delete to avoid a
+        # leaked runtime consuming the account's assignment limit.
+        try:
+            await self.delete_runtime(runtime_id)
+        except Exception:  # noqa: BLE001
+            pass
         raise ColabError(0, f"CreateRuntime LRO timed out after {timeout_s:.0f}s")
 
     async def get_runtime(self, runtime_id: str) -> ConnectionHandle:

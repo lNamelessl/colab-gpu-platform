@@ -77,7 +77,15 @@ _, d = call("GET", "/api/jobs", timeout=60)
 for j in d.get("jobs", []):
     call("DELETE", f"/api/jobs/{j['id']}", timeout=60)
     print("  deleted", j["name"])
-print("  queue clean")
+# wait for any zombie-reconcile task to drain its slot
+t0 = time.time()
+while time.time() - t0 < 600:
+    _, s = call("GET", "/api/status", timeout=40)
+    if s.get("worker_in_flight", 0) == 0:
+        break
+    print("  waiting for worker slot...", int(time.time() - t0), "s", flush=True)
+    time.sleep(10)
+print("  queue clean, worker idle:", s.get("worker_in_flight") == 0)
 
 # ---------- 1. quick job ----------
 print("== 1. quick job")

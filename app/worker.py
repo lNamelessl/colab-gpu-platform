@@ -178,6 +178,10 @@ class Worker:
         client: JupyterClient | None = None
         handle = None
         for attempt_vm in range(int(os.environ.get("PROVISION_RETRIES", "5"))):
+            # A deleted job must not keep churning the runtime pool.
+            if not await db.get_job(job["id"]):
+                await _log(run, "job deleted mid-run; aborting provisioning")
+                return
             try:
                 handle = await self._manager.acquire(
                     job["accelerator"], job["shape"], log_fn=lambda s: _log(run, s)

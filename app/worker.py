@@ -202,17 +202,31 @@ class Worker:
                 # can report "starting" indefinitely while the kernel is fully
                 # functional (verified live 2026-11-19: execute round-trips ok
                 # while the state field still says starting). The REAL
-                # readiness test is an execute round-trip.
+                # readiness test is an execute round-trip, attempted patiently:
+                # fresh-VM kernels can take minutes to become executable.
                 state = await client.wait_kernel_idle(timeout_s=15)
-                await _log(run, f"boot probe on {handle.runtime_id[:14]}: state={state}, executing probe...")
-                try:
-                    await client.execute("print('boot-probe-ok')", timeout_s=120)
-                    adopted = True
-                    break
-                except Exception as pe:  # noqa: BLE001
-                    await _log(run, f"boot probe failed on {handle.runtime_id[:14]}: {pe}")
-                    adopted = False
-                await _log(run, f"runtime VM unusable; reprovisioning...")
+                await _log(run, f"boot probe on {handle.runtime_id[:14]}: state={state}, executing probe (patient)...")
+                import time as _time
+                probe_deadline = _time.monotonic() + int(
+                    os.environ.get("PROBE_WAIT_S", "480")
+                )
+                attempt = 0
+                while _time.monotonic() < probe_deadline:
+                    attempt += 1
+                    try:
+                        await client.execute("print('boot-probe-ok')", timeout_s=90)
+                        adopted = True
+                        await _log(run, f"boot probe ok after {attempt} attempt(s)")
+                        break
+                    except ExecutionTimeout:
+                        await _log(run, f"boot probe attempt {attempt}: no reply yet (kernel warming)")
+                    except (ConnectionLost, JupyterError) as pe:
+                        await _log(run, f"boot probe attempt {attempt}: {pe}")
+                    except Exception as pe:  # noqa: BLE001
+                        await _log(run, f"boot probe attempt {attempt}: {pe}")
+                    await asyncio.sleep(20)
+                if not adopted:
+                    await _log(run, "runtime VM unusable; reprovisioning...")
             finally:
                 if not adopted:
                     try:

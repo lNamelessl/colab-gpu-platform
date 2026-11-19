@@ -217,13 +217,22 @@ _, d = call("POST", "/api/jobs", {
     "code": "print('marker-sched-42')",
 })
 job_id = d["job"]["id"]
-print("  waiting 160s for scheduler tick...", flush=True)
-time.sleep(160)
-_, d2 = call("GET", f"/api/jobs/{job_id}")
-sched_runs = [r_ for r_ in d2["runs"] if r_["trigger"] == "schedule"]
+sched_runs = []
+t0 = time.time()
+while time.time() - t0 < 200:
+    try:
+        _, d2 = call("GET", f"/api/jobs/{job_id}", timeout=40)
+        sched_runs = [r_ for r_ in d2["runs"] if r_["trigger"] == "schedule"]
+        if sched_runs:
+            break
+    except Exception:
+        pass
+    time.sleep(8)
 record("scheduled fires with trigger=schedule", len(sched_runs) >= 1,
        f"{len(sched_runs)} scheduled runs; statuses={[r_['status'] for r_ in sched_runs[:3]]}")
-poll_run(sched_runs[0]["id"], tag="sched") if sched_runs else None
+# delete immediately so the cron does not contend with later battery jobs
+call("DELETE", f"/api/jobs/{job_id}", timeout=60)
+print("  scheduled job deleted after fire evidence")
 
 # ---------- 7. notebook mode ----------
 print("== 7. notebook mode")

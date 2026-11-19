@@ -4,7 +4,7 @@ Headless GPU jobs on your own Colab account. Connect Google once, then submit jo
 (code paste or notebook) from any device: jobs run server-side on Colab runtimes and
 survive disconnects, browser closure, and runtime reclamation via checkpoint/resume.
 
-[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template/colab-gpu-platform)
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.com/deploy/colab-gpu-platform)
 
 ## Quickstart (5 minutes)
 

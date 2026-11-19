@@ -68,10 +68,10 @@ added post-deploy.
      refresh token on the volume.
    - **gcloud ADC**: run
      `gcloud auth application-default login --scopes=openid,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/colaboratory`
-     locally, run `gcloud services enable colaboratory.googleapis.com --project <your-project-id>`,
+     locally, run `gcloud services enable colaboratory.googleapis.com --project YOUR_PROJECT_ID`,
      then paste the contents of
      `~/.config/gcloud/application_default_credentials.json` (plus a
-     `"quota_project_id": "<your-project-id>"` key) into the
+     `"quota_project_id": "YOUR_PROJECT_ID"` key) into the
      `GOOGLE_CREDENTIALS_JSON` deploy prompt.
 2. Railway provisions one service + a `/data` volume (credential, SQLite jobs/runs,
    checkpoints, artifacts) and a public domain with a `/health` healthcheck.

@@ -57,5 +57,50 @@ button:hover, .btn:hover { filter:brightness(1.15); }
 <main>
 {% block body %}{% endblock %}
 </main>
+
+{% if ctx.password_protected %}
+<div class="flash" id="pw-banner" style="display:none">
+  <b>Unlock this browser:</b> actions (submit jobs, connect, delete) are gated by this
+  deployment's <code>APP_ACCESS_PASSWORD</code> (Variables tab in Railway). Enter it once —
+  it is remembered in this browser only.
+  <div class="row" style="margin-top:6px">
+    <div><input id="unlock-pw" type="password" placeholder="APP_ACCESS_PASSWORD"></div>
+    <div style="flex:0"><button class="primary" onclick="savePw()">Unlock</button></div>
+  </div>
+</div>
+{% endif %}
+
+<script>
+// Shared helpers: password-carrying headers + cause/next-action error rendering.
+function platformPw() { return localStorage.getItem('cgppw') || ''; }
+function savePw() {
+  const v = document.getElementById('unlock-pw') ? document.getElementById('unlock-pw').value : '';
+  if (v) { localStorage.setItem('cgppw', v); location.reload(); }
+}
+function authHeaders(extra) {
+  const h = Object.assign({'Content-Type': 'application/json'}, extra || {});
+  const pw = platformPw();
+  if (pw) h['X-Platform-Password'] = pw;
+  return h;
+}
+function friendlyError(d) {
+  // API errors are shaped {error, hint} (or {detail:{error,hint}}) — render
+  // cause + next action, never a raw JSON dump.
+  const det = d && d.detail !== undefined ? d.detail : d;
+  if (det && typeof det === 'object') {
+    const cause = det.error || det.message || '';
+    const next = det.hint ? ' — ' + det.hint : '';
+    return (cause || JSON.stringify(det)) + next;
+  }
+  return typeof det === 'string' ? det : JSON.stringify(det);
+}
+function showUnlockBanner() {
+  const b = document.getElementById('pw-banner');
+  if (b) b.style.display = 'block';
+}
+{% if ctx.password_protected %}
+if (!platformPw()) showUnlockBanner();
+{% endif %}
+</script>
 </body>
 </html>

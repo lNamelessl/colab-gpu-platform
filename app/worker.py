@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -196,35 +197,48 @@ class Worker:
             handle = await self._manager.ensure_fresh(handle)
             client = JupyterClient(handle)
             adopted = False
+            vm_deadline = time.monotonic() + int(os.environ.get("PROBE_WAIT_S", "480"))
             try:
                 await client.create_session(f"job-{job['id'][:8]}-{run['id'][:8]}")
-                # NOTE: do NOT gate on /api/kernels execution_state — fresh VMs
-                # can report "starting" indefinitely while the kernel is fully
-                # functional (verified live 2026-11-19: execute round-trips ok
-                # while the state field still says starting). The REAL
-                # readiness test is an execute round-trip, attempted patiently:
-                # fresh-VM kernels can take minutes to become executable.
-                state = await client.wait_kernel_idle(timeout_s=15)
-                await _log(run, f"boot probe on {handle.runtime_id[:14]}: state={state}, executing probe (patient)...")
-                import time as _time
-                probe_deadline = _time.monotonic() + int(
-                    os.environ.get("PROBE_WAIT_S", "480")
-                )
-                attempt = 0
-                while _time.monotonic() < probe_deadline:
-                    attempt += 1
-                    try:
-                        await client.execute("print('boot-probe-ok')", timeout_s=90)
-                        adopted = True
-                        await _log(run, f"boot probe ok after {attempt} attempt(s)")
-                        break
-                    except ExecutionTimeout:
-                        await _log(run, f"boot probe attempt {attempt}: no reply yet (kernel warming)")
-                    except (ConnectionLost, JupyterError) as pe:
-                        await _log(run, f"boot probe attempt {attempt}: {pe}")
-                    except Exception as pe:  # noqa: BLE001
-                        await _log(run, f"boot probe attempt {attempt}: {pe}")
-                    await asyncio.sleep(20)
+                # Warm-wait phase (HTTP only, NO kernel WS): fresh-VM kernels
+                # can take 5-10+ minutes to leave `starting`, and while they
+                # are starting the Colab proxy closes kernel-channel sockets
+                # almost instantly (2026-11-19 change vs. the earlier
+                # "connect fine" behavior). Every churned WS attempt also
+                # pollutes the per-kernel channel: the proxy keeps effectively
+                # ONE live socket per kernel and kills newer ones while an old
+                # session lingers. So poll REST until `starting` ends; a 404
+                # (kernel gone / VM dying) aborts the warm-wait early.
+                state = "starting"
+                try:
+                    state = await client.wait_kernel_idle(timeout_s=int(
+                        os.environ.get("PROBE_WAIT_S", "480")))
+                except ConnectionLost as ke:
+                    await _log(run, f"warm-wait aborted: {ke}")
+                await _log(run, f"warm-wait on {handle.runtime_id[:14]}: state={state}")
+                # Execute-probe phase (kernel left `starting`): a short window
+                # of execute round-trips, spaced widely so a dead socket can
+                # linger out before the next one opens.
+                if state != "starting":
+                    probe_deadline = min(
+                        vm_deadline,
+                        time.monotonic() + int(os.environ.get("PROBE_RETRY_S", "180")),
+                    )
+                    attempt = 0
+                    while time.monotonic() < probe_deadline:
+                        attempt += 1
+                        try:
+                            await client.execute("print('boot-probe-ok')", timeout_s=90)
+                            adopted = True
+                            await _log(run, f"boot probe ok after {attempt} attempt(s)")
+                            break
+                        except ExecutionTimeout:
+                            await _log(run, f"boot probe attempt {attempt}: no reply yet (kernel warming)")
+                        except (ConnectionLost, JupyterError) as pe:
+                            await _log(run, f"boot probe attempt {attempt}: {pe}")
+                        except Exception as pe:  # noqa: BLE001
+                            await _log(run, f"boot probe attempt {attempt}: {pe}")
+                        await asyncio.sleep(45)
                 if not adopted:
                     await _log(run, "runtime VM unusable; reprovisioning...")
             finally:

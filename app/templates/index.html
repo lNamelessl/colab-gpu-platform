@@ -1,10 +1,31 @@
 {% extends "base.html" %}
 {% block body %}
+{% if not ctx.connected %}
+<div class="flash err">
+  <b>Not connected to Google — one step to fix.</b>
+  Open <a href="/connect">/connect</a>: copy the consent URL into the browser where you are
+  signed in to Google, approve it, then paste the <code>code=4/0A...</code> value from the
+  browser's <b>address bar</b> (the "This site can't be reached" page after approval is
+  expected) together with a Google Cloud project ID as the <b>quota project</b> (the Colab API
+  requires one; the platform auto-enables the Colab API on it — get a project at
+  <a href="https://console.cloud.google.com/projectcreate" target="_blank">console.cloud.google.com/projectcreate</a>).
+  Alternatively set the <code>GOOGLE_CREDENTIALS_JSON</code> variable to a gcloud ADC credential
+  JSON and redeploy. Jobs need a Colab runtime, which needs this credential.
+</div>
+{% endif %}
+{% if ctx.connected and not ctx.jobs %}
+<div class="flash ok">
+  <b>Run your first job — one click.</b> This queues a small hello-world on a fresh Colab
+  runtime (CPU) end-to-end, typically under 2 minutes, so you can watch the platform work:
+  provisioning, execution, streaming output, artifacts.
+  <div style="margin-top:8px">
+    <button class="primary" onclick="runExampleJob(this)">Run your first job</button>
+    <span id="ex-result" class="muted"></span>
+  </div>
+</div>
+{% endif %}
 <div class="panel">
   <h2>New GPU job</h2>
-  {% if not ctx.connected %}
-  <div class="flash err">Not connected to Google. <a href="/connect">Complete the one-time consent</a> first — jobs need a Colab runtime to run on.</div>
-  {% endif %}
   <form onsubmit="submitJob(event)">
     <div class="row">
       <div><label>Job name</label><input id="j-name" value="hello-gpu"></div>
@@ -34,6 +55,7 @@ print("machine:", platform.machine())</textarea>
     </div>
     <div style="margin-top:12px">
       <button class="primary" type="submit" {{ '' if ctx.connected else 'disabled' }}>Submit job</button>
+      <button type="button" onclick="fillExample()">Load example code</button>
       <span id="j-result" class="muted"></span>
     </div>
   </form>
@@ -68,7 +90,7 @@ print("machine:", platform.machine())</textarea>
 <div class="panel">
   <h2>Platform</h2>
   <p class="muted">
-    Runtime reuse: <b>{{ 'on (idle TTL {{ 300 }}s)' if ctx.runtime_reuse else 'off (runtime deleted on job completion)' }}</b>
+    Runtime reuse: <b>{{ 'on (idle TTL 300s)' if ctx.runtime_reuse else 'off (runtime deleted on job completion)' }}</b>
     · max concurrent jobs: <b>{{ ctx.max_concurrent }}</b>
     · webhook: <b>{{ 'configured' if ctx.notify_configured else 'not set (NOTIFY_WEBHOOK_URL)' }}</b>
   </p>
@@ -78,6 +100,17 @@ print("machine:", platform.machine())</textarea>
 </div>
 
 <script>
+const EXAMPLE_CODE = `import sys, platform, os, time
+print("hello from a headless Colab runtime!")
+print("python:", sys.version.split()[0])
+print("machine:", platform.machine())
+print("job:", os.environ.get("JOB_NAME"), "- attempt", os.environ.get("ATTEMPT"))
+time.sleep(2)
+with open(os.path.join(os.environ["ARTIFACT_DIR"], "hello.txt"), "w") as f:
+    f.write("written server-side at " + str(time.time()))
+print("wrote artifact hello.txt - the dashboard Artifacts tab will show it when the run completes")
+print("my-first-job-done")`;
+function fillExample() { document.getElementById('j-code').value = EXAMPLE_CODE; }
 async function submitJob(e) {
   e.preventDefault();
   const body = {
@@ -91,16 +124,32 @@ async function submitJob(e) {
   };
   const nb = document.getElementById('j-notebook').value.trim();
   if (nb) body.notebook_json = nb;
-  const r = await fetch('/api/jobs', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  const r = await fetch('/api/jobs', {method:'POST', headers: authHeaders(), body: JSON.stringify(body)});
   const d = await r.json().catch(() => ({}));
   const el = document.getElementById('j-result');
-  if (r.ok) { el.textContent = 'queued run ' + (d.run ? d.run.id.slice(0,8) : ''); setTimeout(() => location.reload(), 600); }
-  else { el.textContent = 'error: ' + JSON.stringify(d.detail || d); el.style.color = '#f85149'; }
+  if (r.ok) { el.textContent = 'queued run ' + (d.run ? d.run.id.slice(0,8) : ''); setTimeout(() => { location.href = d.job ? '/jobs/' + d.job.id : '/'; }, 400); }
+  else {
+    el.textContent = friendlyError(d); el.style.color = '#f85149';
+    if (r.status === 401) showUnlockBanner();
+  }
+}
+async function runExampleJob(btn) {
+  btn.disabled = true;
+  const el = document.getElementById('ex-result');
+  el.textContent = 'queueing…';
+  const body = { name: 'my-first-job', code: EXAMPLE_CODE, accelerator: 'NONE', shape: 'STANDARD', timeout_min: 10 };
+  const r = await fetch('/api/jobs', {method:'POST', headers: authHeaders(), body: JSON.stringify(body)});
+  const d = await r.json().catch(() => ({}));
+  if (r.ok && d.job) { el.textContent = 'queued! opening the job page…'; location.href = '/jobs/' + d.job.id; }
+  else {
+    el.textContent = friendlyError(d); el.style.color = '#f85149'; btn.disabled = false;
+    if (r.status === 401) showUnlockBanner();
+  }
 }
 async function rerunJob(id) {
-  const r = await fetch('/api/jobs/' + id + '/run', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+  const r = await fetch('/api/jobs/' + id + '/run', {method:'POST', headers: authHeaders(), body:'{}'});
   if (r.ok) location.href = '/jobs/' + id;
-  else alert(JSON.stringify(await r.json().catch(() => ({}))));
+  else { showUnlockBanner(); alert(friendlyError(await r.json().catch(() => ({})))); }
 }
 </script>
 {% endblock %}

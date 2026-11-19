@@ -212,33 +212,60 @@ def _parse_error_details(err: dict) -> tuple[str | None, str]:
 
 
 def friendly_create_error(e: Exception) -> str:
-    """Human-facing message for common CreateRuntime failures."""
+    """Human-facing message: cause + exact next action + link."""
     if isinstance(e, ColabError):
         text = f"{e} | body={e.body[:400]}" if e.body else str(e)
         low = text.lower()
         if "quota project" in low or "service_disabled" in low:
             return (
-                "Colab API needs a quota project: reconnect with your Google "
-                "Cloud project ID (the platform enables the Colab API on it)."
+                "Cause: the Colab API requires a quota project (a Google Cloud "
+                "project of yours) and none was supplied. Next: open "
+                "https://console.cloud.google.com/projectcreate to create one, "
+                "then go to /connect, enter it as 'Quota project ID' and submit "
+                "(the platform auto-enables the Colab API on it) — or set the "
+                "QUOTA_PROJECT_ID variable and redeploy."
             )
         if "has not been used in project" in low or "it is disabled" in low:
             return (
-                "Colab API is not enabled on the quota project yet — enable "
-                "propagation can take a minute; retry, or run `gcloud services "
-                "enable colaboratory.googleapis.com --project <id>`."
+                "Cause: the Colab API is not enabled on the quota project yet "
+                "(enablement propagation can take a minute). Next: retry in "
+                "~1 min, or open "
+                "https://console.cloud.google.com/apis/library/colaboratory.googleapis.com "
+                "and click Enable, or run `gcloud services enable "
+                "colaboratory.googleapis.com --project <your-project-id>`."
             )
         if "quota" in low:
-            return "Colab refused the runtime: insufficient quota / compute units exhausted."
+            return (
+                "Cause: Colab refused the runtime — quota/compute budget for "
+                "your tier is exhausted (free-tier GPU resets daily). Next: "
+                "retry later, or submit with accelerator NONE, or upgrade to "
+                "Pro at https://colab.research.google.com/signup."
+            )
         if "stockout" in low or "unavailable" in low or "capacity" in low:
-            return "Colab refused the runtime: accelerator unavailable (stockout). Try NONE/T4."
+            return (
+                "Cause: Colab has no capacity for that accelerator right now. "
+                "Next: submit with accelerator NONE (CPU) or try again later — "
+                "GPU availability varies through the day."
+            )
         if "too many" in low or "assignment" in low:
-            return "Colab refused the runtime: too many active assignments for this account."
+            return (
+                "Cause: too many active runtime assignments for this account "
+                "(the limit is account-wide, shared across every client). "
+                "Next: wait for existing runtimes to finish and retry."
+            )
         if "denylist" in low or "banned" in low:
-            return "Colab refused the runtime: account is restricted by Colab."
+            return (
+                "Cause: the Colab account is restricted. Next: check "
+                "https://colab.research.google.com for the restriction notice "
+                "before retrying."
+            )
         if "401" in str(e.status) or "403" in str(e.status):
             return (
-                "Colab API returned 401/403 — the credential may lack the "
-                "colaboratory scope or the account/API may not be enabled."
+                "Cause: Colab API returned 401/403 — the credential may lack "
+                "the colaboratory scope, or the quota project is wrong/missing. "
+                "Next: reconnect at /connect with the quota project ID filled "
+                "in (API reference: "
+                "https://developers.google.com/colab/api/reference/rest)."
             )
         return text
     return str(e)

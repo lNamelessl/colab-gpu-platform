@@ -6,6 +6,47 @@ survive disconnects, browser closure, and runtime reclamation via checkpoint/res
 
 [![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template/colab-gpu-platform)
 
+## Quickstart (5 minutes)
+
+1. **Deploy** — click the button. The deploy form asks one question:
+   `GOOGLE_CREDENTIALS_JSON` (you can leave it blank and connect from the dashboard
+   in step 2 instead). Everything else is pre-filled: `APP_ACCESS_PASSWORD` is
+   auto-generated per deploy (find it in the **Variables** tab), one `/data` volume
+   and a public domain are provisioned for you.
+2. **Connect Google** — open your deployment URL → `/connect`:
+   copy the consent URL into the browser where you are signed in to Google,
+   approve it (the "This site can't be reached" landing page is expected), paste
+   the `code=4/0A...` value from the **address bar**, enter any Google Cloud
+   project ID as the **quota project** ([create one](https://console.cloud.google.com/projectcreate)
+   if you have none — the Colab API requires it; the platform auto-enables the
+   Colab API on your project). Green "connected" badge = done. This is stored on
+   your volume and refreshed server-side forever — once ever, not per deploy.
+3. **Run your first job — one click.** The dashboard shows a **"Run your first job"**
+   button on first visit: hello-world on a real Colab runtime end-to-end, typically
+   under 2 minutes, including artifact harvest. Watch it live on the job page.
+
+Or from a terminal (password from the Variables tab):
+
+```bash
+export PW="<APP_ACCESS_PASSWORD from the Variables tab>"
+export URL="https://your-deployment.up.railway.app"
+
+# submit a job
+curl -s -X POST "$URL/api/jobs" -H "Content-Type: application/json" \
+     -H "X-Platform-Password: $PW" \
+     -d '{"name":"hello","accelerator":"NONE","shape":"STANDARD","timeout_min":10,
+          "code":"import sys, platform\nprint(\"python:\", sys.version.split()[0])\nprint(\"machine:\", platform.machine())"}'
+# → {"job": {..."id":"<job-id>"...}, "run": {...}}
+
+# watch it live (WebSocket; every modern browser console works, or websocat)
+websocat "wss://.../api/jobs/<job-id>/stream"          # backlog first, then live lines
+
+# full log as text + artifacts + tier
+curl -s "$URL/api/jobs/<job-id>/log"
+curl -s "$URL/api/artifacts"
+curl -s "$URL/api/subscription"
+```
+
 ## What it does
 
 - **Connect once** — one-time Google consent via the `/connect` page: open the
@@ -42,7 +83,7 @@ survive disconnects, browser closure, and runtime reclamation via checkpoint/res
 |---|---|
 | Free tier lifetime | Runtimes are capped (~12 h) and **idle runtimes are actively deleted by Colab** — that is Colab's design, not a bug. Checkpoint/resume is the reliability mechanism. |
 | No synthetic keep-alive | The platform never pings the runtime to keep it alive. The only periodic call is a token refresh (`GetRuntime` at expiry − 5 min) — a metadata read, identical to what Google's own VS Code client does. |
-| VM boot pacing | Under load, Colab's VM assignment can take minutes and freshly assigned VMs sometimes boot a kernel that never leaves `starting` (a hung VM). The platform boot-probes every new runtime (waits up to 7 min for `idle`), tears down hung VMs and reprovisions (up to 5 tries) — provisioning a busy-day job can therefore take a while. |
+| VM boot pacing | Under load, Colab's VM assignment can take minutes and freshly assigned kernels often sit in `starting` for 5–10+ minutes. The platform warm-waits each new runtime over REST only (up to 8 min for the kernel to leave `starting` — opening kernel WebSockets during boot gets them closed by the Colab proxy), then probes execution; a VM that never boots is torn down and reprovisioned (up to 5 tries). First-job provisioning can honestly take a while on a busy day. |
 | Quota | Colab free tier has usage limits and may refuse runtimes (quota/stockout); errors surface verbatim. Pro/Pro+ raise limits and unlock A100/H100. |
 | ToS | Batch compute via the official Colab API on your own account is sanctioned use. **Hosting live web services from runtimes is prohibited** — this platform only orchestrates job executions. |
 | API beta | The Colab API is v1beta and (as of the vendored spec) allowlist-gated per project; if your account gets 401/403, the platform surfaces it at connect time. |

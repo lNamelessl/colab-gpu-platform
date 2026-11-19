@@ -85,13 +85,15 @@ function loadRun(runId) {
   ws.onclose = () => { statusEl.textContent = 'stream closed'; };
 }
 async function rerunJob(id) {
-  const r = await fetch('/api/jobs/' + id + '/run', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
-  if (r.ok) location.reload(); else alert(JSON.stringify(await r.json().catch(() => ({}))));
+  const r = await fetch('/api/jobs/' + id + '/run', {method:'POST', headers: authHeaders(), body:'{}'});
+  if (r.ok) location.reload();
+  else { showUnlockBanner(); alert(friendlyError(await r.json().catch(() => ({})))); }
 }
 async function delJob(id) {
   if (!confirm('Delete job and all runs?')) return;
-  const r = await fetch('/api/jobs/' + id, {method:'DELETE'});
-  if (r.ok) location.href = '/'; else alert(JSON.stringify(await r.json().catch(() => ({}))));
+  const r = await fetch('/api/jobs/' + id, {method:'DELETE', headers: authHeaders()});
+  if (r.ok) location.href = '/';
+  else { showUnlockBanner(); alert(friendlyError(await r.json().catch(() => ({})))); }
 }
 // auto-load latest run
 {% if ctx.runs %}loadRun('{{ ctx.runs[0].id }}');{% endif %}

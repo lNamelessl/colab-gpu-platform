@@ -102,16 +102,30 @@ class JupyterClient:
         return data
 
     async def wait_kernel_idle(self, timeout_s: float = 180.0) -> str:
-        """Poll GET /api/kernels/{id} until execution_state != 'starting'."""
+        """Poll GET /api/kernels/{id} until execution_state != 'starting'.
+
+        HTTP-only on purpose: while a kernel is `starting`, the Colab proxy
+        closes kernel-channel WS sockets almost immediately (2026-11-19 live
+        verification; the earlier "connect fine" behavior changed), and each
+        churned attempt pollutes the per-kernel channel — the proxy keeps
+        effectively ONE live socket per kernel and kills newer ones while an
+        old session lingers. Warm the kernel with REST polls only; touch the
+        WS only once the state leaves `starting`.
+        Raises ConnectionLost when the kernel disappears (404 — VM dying).
+        """
         deadline = time.monotonic() + timeout_s
         state = "unknown"
         while time.monotonic() < deadline:
             try:
                 r = await self._http.get(f"/api/kernels/{self.kernel_id}")
+                if r.status_code == 404:
+                    raise ConnectionLost("kernel 404 during warm-wait (VM dying)")
                 if r.status_code == 200:
                     state = (r.json() or {}).get("execution_state") or state
                     if state != "starting":
                         return state
+            except ConnectionLost:
+                raise
             except Exception:  # noqa: BLE001 — transient proxy errors
                 pass
             await asyncio.sleep(3)

@@ -53,6 +53,11 @@
 </div>
 
 <script>
+// Pre-fill the password from this browser's saved unlock (if any).
+for (const id of ['c-pw', 'd-pw']) {
+  const el = document.getElementById(id);
+  if (el && platformPw()) el.value = platformPw();
+}
 async function doConnect() {
   const body = {};
   const code = document.getElementById('c-code').value.trim();
@@ -62,24 +67,29 @@ async function doConnect() {
   const q = document.getElementById('c-quota').value.trim();
   if (q) body.quota_project_id = q;
   const pw = document.getElementById('c-pw');
-  if (pw) body.password = pw.value;
+  if (pw) body.password = pw.value || platformPw();
   const el = document.getElementById('c-result');
-  const r = await fetch('/api/connect', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  const r = await fetch('/api/connect', {method:'POST', headers: authHeaders(), body: JSON.stringify(body)});
   const d = await r.json().catch(() => ({}));
   if (r.ok && d.ok) {
     el.textContent = 'connected! Colab check: ' + d.colab_check;
     el.style.color = '#3fb950';
     setTimeout(() => location.href = '/', 1200);
   } else {
-    el.textContent = JSON.stringify(d.detail || d);
+    el.textContent = friendlyError(d);
     el.style.color = '#f85149';
+    if (r.status === 401) showUnlockBanner();
+    else if (String(el.textContent).toLowerCase().includes('quota')) {
+      el.textContent += ' — get a project ID at https://console.cloud.google.com/projectcreate, then retry';
+    }
   }
 }
 async function doDisconnect() {
   const pw = document.getElementById('d-pw');
-  const body = pw ? {password: pw.value} : {};
-  const r = await fetch('/api/disconnect', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  const body = pw ? {password: pw.value || platformPw()} : {};
+  const r = await fetch('/api/disconnect', {method:'POST', headers: authHeaders(), body: JSON.stringify(body)});
   if (r.ok) location.reload();
+  else { showUnlockBanner(); alert(friendlyError(await r.json().catch(() => ({})))); }
 }
 </script>
 {% endblock %}

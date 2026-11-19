@@ -40,9 +40,10 @@ added post-deploy.
 - Free-tier Colab caps runtimes (~12 h) and **actively deletes idle runtimes** — that
   is Colab's design. This platform never sends synthetic keep-alive; checkpoint/resume
   is the reliability mechanism.
-- Under load, Colab VMs can take minutes to boot and occasionally hang (`starting`
-  forever). The platform boot-probes each new runtime, tears down hung VMs and
-  reprovisions (up to 5 tries) — busy-day provisioning can take a while, honestly.
+- Under load, Colab VMs can take minutes to boot and freshly assigned kernels often
+  sit in `starting` for 5–10+ minutes. The platform warm-waits over REST (up to
+  8 min), then probes execution; hung VMs are torn down and reprovisioned (up to
+  5 tries) — busy-day provisioning can take a while, honestly.
 - Colab quota can refuse runtime creation (quota/stockout) — errors surface verbatim.
   Pro/Pro+ raise limits and unlock A100/H100 (eligibility comes from the API itself).
 - The Colab API is v1beta and allowlist-gated for some accounts; a 401/403 surfaces
@@ -74,7 +75,12 @@ added post-deploy.
      `GOOGLE_CREDENTIALS_JSON` deploy prompt.
 2. Railway provisions one service + a `/data` volume (credential, SQLite jobs/runs,
    checkpoints, artifacts) and a public domain with a `/health` healthcheck.
-3. Open the domain → submit a job from the dashboard or `POST /api/jobs`.
+3. Open the domain → the dashboard tells you exactly where you are: **"Run your
+   first job"** is a one-click button on first visit (hello-world on a real Colab
+   runtime end-to-end, typically under 2 minutes, including artifact harvest).
+   The password prompt on actions is `APP_ACCESS_PASSWORD` from the Variables
+   tab, entered once per browser. API users: `POST /api/jobs` with the
+   `X-Platform-Password` header (curl examples in the README).
 
 # Deploy and Host
 

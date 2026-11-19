@@ -194,12 +194,21 @@ class Worker:
             adopted = False
             try:
                 await client.create_session(f"job-{job['id'][:8]}-{run['id'][:8]}")
-                state = await client.wait_kernel_idle(timeout_s=420)
-                await _log(run, f"boot probe on {handle.runtime_id[:14]}: kernel state {state}")
-                if state == "idle":
+                # NOTE: do NOT gate on /api/kernels execution_state — fresh VMs
+                # can report "starting" indefinitely while the kernel is fully
+                # functional (verified live 2026-11-19: execute round-trips ok
+                # while the state field still says starting). The REAL
+                # readiness test is an execute round-trip.
+                state = await client.wait_kernel_idle(timeout_s=15)
+                await _log(run, f"boot probe on {handle.runtime_id[:14]}: state={state}, executing probe...")
+                try:
+                    await client.execute("print('boot-probe-ok')", timeout_s=120)
                     adopted = True
                     break
-                await _log(run, f"runtime VM looks hung (state={state}); reprovisioning...")
+                except Exception as pe:  # noqa: BLE001
+                    await _log(run, f"boot probe failed on {handle.runtime_id[:14]}: {pe}")
+                    adopted = False
+                await _log(run, f"runtime VM unusable; reprovisioning...")
             finally:
                 if not adopted:
                     try:
@@ -211,7 +220,7 @@ class Worker:
                     client = None
                     handle = None
         if client is None or handle is None:
-            msg = "provisioning failed: repeated runtimes booted broken kernels (Colab VM pacing)"
+            msg = "provisioning failed: repeated runtimes failed the execute probe (Colab VM pacing)"
             await db.update_run(run["id"], status="FAILED", error=msg, finished_at=db.now())
             await _log(run, f"PROVISION FAILED: {msg}")
             await fire_event("FAILED", job, run, msg)
